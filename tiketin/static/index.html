@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tiketin — Tiket Event Kampus</title>
+<style>
+  :root { --bg:#f6f4ef; --card:#fff; --ink:#1d1b16; --muted:#6b665c; --line:#e3ded3;
+          --brand:#c2410c; --brand-ink:#fff; --ok:#15803d; --bad:#b91c1c; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:system-ui,-apple-system,"Segoe UI",sans-serif; background:var(--bg); color:var(--ink); }
+  header { background:var(--ink); color:#fff; padding:14px 20px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; }
+  header h1 { margin:0; font-size:20px; letter-spacing:.5px; }
+  header h1 span { color:#fb923c; }
+  main { max-width:960px; margin:0 auto; padding:20px 16px 60px; }
+  h2 { font-size:17px; margin:28px 0 12px; }
+  .grid { display:grid; gap:12px; grid-template-columns:repeat(auto-fill,minmax(270px,1fr)); }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; }
+  .card h3 { margin:0 0 6px; font-size:15px; }
+  .meta { color:var(--muted); font-size:13px; margin:2px 0; }
+  .bar { height:6px; background:var(--line); border-radius:3px; overflow:hidden; margin:10px 0; }
+  .bar i { display:block; height:100%; background:var(--brand); }
+  button, select, input { font:inherit; padding:7px 10px; border-radius:7px; border:1px solid var(--line); }
+  button { background:var(--brand); color:var(--brand-ink); border-color:var(--brand); cursor:pointer; }
+  button.ghost { background:transparent; color:inherit; border-color:currentColor; }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  form { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+  form input { flex:1 1 150px; min-width:0; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .code { font-family:ui-monospace,monospace; font-weight:600; }
+  .tag { font-size:12px; padding:2px 8px; border-radius:20px; border:1px solid currentColor; }
+  .ACTIVE { color:var(--ok); } .CANCELLED { color:var(--bad); }
+  #toast { position:fixed; left:50%; bottom:20px; transform:translateX(-50%); background:var(--ink); color:#fff;
+           padding:10px 16px; border-radius:8px; font-size:14px; display:none; max-width:90vw; }
+  .hidden { display:none !important; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Tiket<span>in</span></h1>
+  <div class="row" id="userbox"></div>
+</header>
+<main>
+  <section id="authSection" class="card">
+    <h2 style="margin-top:0">Masuk / Daftar</h2>
+    <form id="loginForm">
+      <input name="email" type="email" placeholder="Email" required>
+      <input name="password" type="password" placeholder="Password" required>
+      <button>Masuk</button>
+    </form>
+    <p class="meta">Belum punya akun?</p>
+    <form id="registerForm">
+      <input name="name" placeholder="Nama" required>
+      <input name="email" type="email" placeholder="Email" required>
+      <input name="password" type="password" placeholder="Password (min. 8)" required>
+      <button class="ghost" style="color:var(--brand)">Daftar</button>
+    </form>
+  </section>
+
+  <section id="adminSection" class="card hidden">
+    <h2 style="margin-top:0">Tambah Event (Admin)</h2>
+    <form id="eventForm">
+      <input name="name" placeholder="Nama event" required>
+      <input name="event_date" type="date" required>
+      <input name="price" type="number" min="0" placeholder="Harga (Rp)" required>
+      <input name="quota" type="number" min="1" placeholder="Kuota" required>
+      <button>Simpan</button>
+    </form>
+  </section>
+
+  <h2>Event Tersedia</h2>
+  <div class="grid" id="events"></div>
+
+  <section id="ticketSection" class="hidden">
+    <h2>Tiket Saya</h2>
+    <div class="grid" id="tickets"></div>
+  </section>
+</main>
+<div id="toast"></div>
+
+<script>
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} },
+};
+let token = store.get("tiketin_token");
+let me = null;
+const rupiah = n => "Rp" + Number(n).toLocaleString("id-ID");
+const tgl = s => new Date(s + "T00:00:00").toLocaleDateString("id-ID", { weekday:"short", day:"numeric", month:"long", year:"numeric" });
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
+
+function toast(msg) {
+  const t = document.getElementById("toast");
+  t.textContent = msg; t.style.display = "block";
+  clearTimeout(toast.timer); toast.timer = setTimeout(() => t.style.display = "none", 3500);
+}
+
+async function api(path, opts = {}) {
+  const headers = { "Content-Type": "application/json" };
+  if (token) headers.Authorization = "Bearer " + token;
+  const res = await fetch(path, { ...opts, headers, body: opts.body ? JSON.stringify(opts.body) : undefined });
+  const data = res.status === 204 ? {} : await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error ? data.error.message : "Gagal (" + res.status + ")");
+  return data;
+}
+
+function formData(form) {
+  const d = Object.fromEntries(new FormData(form));
+  for (const k of ["price", "quota"]) if (k in d) d[k] = parseInt(d[k], 10);
+  return d;
+}
+
+async function loadMe() {
+  me = null;
+  if (token) { try { me = (await api("/api/auth/me")).user; } catch { token = null; store.set("tiketin_token", null); } }
+  const box = document.getElementById("userbox");
+  box.innerHTML = me ? `<span>${esc(me.name)}${me.is_admin ? " (admin)" : ""}</span><button class="ghost" id="logout">Keluar</button>` : "";
+  if (me) document.getElementById("logout").onclick = () => { token = null; store.set("tiketin_token", null); refresh(); };
+  document.getElementById("authSection").classList.toggle("hidden", !!me);
+  document.getElementById("adminSection").classList.toggle("hidden", !(me && me.is_admin));
+  document.getElementById("ticketSection").classList.toggle("hidden", !me);
+}
+
+async function loadEvents() {
+  const { events } = await api("/api/events");
+  document.getElementById("events").innerHTML = events.map(e => `
+    <div class="card">
+      <h3>${esc(e.name)}</h3>
+      <p class="meta">${tgl(e.event_date)} · ${rupiah(e.price)}</p>
+      <div class="bar"><i style="width:${Math.round(e.sold / e.quota * 100)}%"></i></div>
+      <p class="meta">Terjual ${e.sold} / ${e.quota} · sisa <b>${e.available}</b></p>
+      ${me ? `<div class="row">
+        <select id="qty-${e.id}">${[1,2,3,4].map(n => `<option>${n}</option>`).join("")}</select>
+        <button onclick="buy(${e.id})" ${e.available ? "" : "disabled"}>${e.available ? "Beli" : "Habis"}</button>
+      </div>` : `<p class="meta">Masuk untuk membeli.</p>`}
+    </div>`).join("") || `<p class="meta">Belum ada event.</p>`;
+}
+
+async function loadTickets() {
+  if (!me) return;
+  const { tickets } = await api("/api/tickets/me");
+  document.getElementById("tickets").innerHTML = tickets.map(t => `
+    <div class="card">
+      <div class="row" style="justify-content:space-between"><span class="code">${t.code}</span><span class="tag ${t.status}">${t.status === "ACTIVE" ? "Aktif" : "Dibatalkan"}</span></div>
+      <p class="meta">${esc(t.event.name)}</p>
+      <p class="meta">${tgl(t.event.event_date)} · ${rupiah(t.event.price)}</p>
+      ${t.status === "ACTIVE" ? `<button class="ghost" onclick="cancelTicket('${t.code}')">Batalkan</button>` : ""}
+    </div>`).join("") || `<p class="meta">Belum punya tiket.</p>`;
+}
+
+async function buy(id) {
+  const quantity = parseInt(document.getElementById("qty-" + id).value, 10);
+  try { const r = await api(`/api/events/${id}/tickets`, { method:"POST", body:{ quantity } });
+        toast("Berhasil membeli " + r.tickets.length + " tiket"); }
+  catch (e) { toast(e.message); }
+  refresh();
+}
+
+async function cancelTicket(code) {
+  if (!confirm("Batalkan tiket " + code + "?")) return;
+  try { await api(`/api/tickets/${code}/cancel`, { method:"POST" }); toast("Tiket dibatalkan, kuota dikembalikan"); }
+  catch (e) { toast(e.message); }
+  refresh();
+}
+
+document.getElementById("loginForm").onsubmit = async ev => {
+  ev.preventDefault();
+  try { token = (await api("/api/auth/login", { method:"POST", body: formData(ev.target) })).token;
+        store.set("tiketin_token", token); refresh(); }
+  catch (e) { toast(e.message); }
+};
+document.getElementById("registerForm").onsubmit = async ev => {
+  ev.preventDefault();
+  try { token = (await api("/api/auth/register", { method:"POST", body: formData(ev.target) })).token;
+        store.set("tiketin_token", token); toast("Akun dibuat"); refresh(); }
+  catch (e) { toast(e.message); }
+};
+document.getElementById("eventForm").onsubmit = async ev => {
+  ev.preventDefault();
+  try { await api("/api/events", { method:"POST", body: formData(ev.target) }); ev.target.reset(); toast("Event ditambahkan"); refresh(); }
+  catch (e) { toast(e.message); }
+};
+
+async function refresh() { await loadMe(); await loadEvents(); await loadTickets(); }
+refresh();
+</script>
+</body>
+</html>
