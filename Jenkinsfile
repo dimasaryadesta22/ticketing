@@ -1,5 +1,5 @@
 // Jenkinsfile — Tiketin (Studi Kasus K02, Kelompok 5)
-// Alur: Checkout → Test → Build Image → Push Image → Deploy → Smoke Test
+// Alur: Checkout → Test → Build Image → Push Image → Deploy → Smoke Test → Concurrency Check
 // Bisa dijalankan di agent Linux (sh) maupun Windows (bat) tanpa diubah.
 //
 // Credentials yang harus dibuat di Jenkins (Manage Jenkins → Credentials):
@@ -106,6 +106,13 @@ pipeline {
                 runCmd('docker compose exec -T app python scripts/smoke_test.py --retries 12 --delay 5')
             }
         }
+
+        stage('Concurrency Check') {
+            steps {
+                // 50 pembelian paralel ke event berkuota 20 → harus terjual tepat 20.
+                runCmd('docker compose exec -T app python scripts/concurrency_check.py --requests 50 --quota 20')
+            }
+        }
     }
 
     post {
@@ -123,7 +130,7 @@ URL     : ${env.BUILD_URL}
             }
         }
         success {
-            echo 'Pipeline SUKSES: test lolos, image ter-push ke Docker Hub, aplikasi ter-deploy, smoke test lolos.'
+            echo 'Pipeline SUKSES: test lolos, image ter-push ke Docker Hub, aplikasi ter-deploy, smoke test & concurrency check lolos.'
         }
         failure {
             echo 'Pipeline GAGAL: lihat stage yang merah di Stage View. Jika gagal di Test, versi lama aplikasi tetap berjalan.'
